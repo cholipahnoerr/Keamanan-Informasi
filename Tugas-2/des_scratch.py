@@ -1,4 +1,9 @@
-# Tabel Initial Permutation (IP)
+# Modul ini berisi implementasi lengkap algoritma DES dari nol.
+
+# --- KONSTANTA TABEL PERMUTASI & SUBSTITUSI DES ---
+# Tabel-tabel ini adalah bagian standar dari algoritma DES.
+
+# Initial Permutation (IP): Mengacak blok plaintext 64-bit di awal.
 IP = [58, 50, 42, 34, 26, 18, 10, 2,
       60, 52, 44, 36, 28, 20, 12, 4,
       62, 54, 46, 38, 30, 22, 14, 6,
@@ -8,7 +13,7 @@ IP = [58, 50, 42, 34, 26, 18, 10, 2,
       61, 53, 45, 37, 29, 21, 13, 5,
       63, 55, 47, 39, 31, 23, 15, 7]
 
-# Tabel Final Permutation (FP), merupakan invers dari IP
+# Final Permutation (FP): Invers dari IP, mengembalikan blok ke urutan semula di akhir.
 FP = [40, 8, 48, 16, 56, 24, 64, 32,
       39, 7, 47, 15, 55, 23, 63, 31,
       38, 6, 46, 14, 54, 22, 62, 30,
@@ -18,7 +23,7 @@ FP = [40, 8, 48, 16, 56, 24, 64, 32,
       34, 2, 42, 10, 50, 18, 58, 26,
       33, 1, 41, 9, 49, 17, 57, 25]
 
-# Tabel Expansion (E) untuk memperluas blok 32-bit menjadi 48-bit
+# Expansion (E): Memperluas blok R-half 32-bit menjadi 48-bit agar bisa di-XOR dgn subkey 48-bit.
 E = [32, 1, 2, 3, 4, 5,
      4, 5, 6, 7, 8, 9,
      8, 9, 10, 11, 12, 13,
@@ -28,7 +33,7 @@ E = [32, 1, 2, 3, 4, 5,
      24, 25, 26, 27, 28, 29,
      28, 29, 30, 31, 32, 1]
 
-# Tabel Permuted Choice 1 (PC-1) untuk Key Schedule
+# Permuted Choice 1 (PC1): Membuang bit paritas dari kunci 64-bit dan mengacaknya menjadi 56-bit.
 PC1 = [57, 49, 41, 33, 25, 17, 9,
        1, 58, 50, 42, 34, 26, 18,
        10, 2, 59, 51, 43, 35, 27,
@@ -38,7 +43,7 @@ PC1 = [57, 49, 41, 33, 25, 17, 9,
        14, 6, 61, 53, 45, 37, 29,
        21, 13, 5, 28, 20, 12, 4]
 
-# Tabel Permuted Choice 2 (PC-2) untuk Key Schedule
+# Permuted Choice 2 (PC2): Mengompres kunci 56-bit (C+D) menjadi subkey 48-bit untuk ronde ini.
 PC2 = [14, 17, 11, 24, 1, 5,
        3, 28, 15, 6, 21, 10,
        23, 19, 12, 4, 26, 8,
@@ -48,10 +53,12 @@ PC2 = [14, 17, 11, 24, 1, 5,
        44, 49, 39, 56, 34, 53,
        46, 42, 50, 36, 29, 32]
 
-# Jumlah pergeseran kiri (left shift) untuk setiap ronde pada Key Schedule
+# SHIFT_SCHEDULE: Menentukan berapa kali C dan D digeser (circular left shift) per ronde.
 SHIFT_SCHEDULE = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
 
-# S-Boxes (Substitution Boxes)
+# S-Boxes (Substitution Boxes): Jantung dari keamanan DES.
+# Mengubah input 6-bit menjadi output 4-bit secara non-linear.
+# CATATAN: Versi di bawah ini SUDAH DIPERBAIKI (bug sintaks Anda telah dikoreksi).
 S_BOXES = [
     # S1
     [[14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7],
@@ -95,33 +102,38 @@ S_BOXES = [
      [2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11]]
 ]
 
-# Tabel Permutasi (P-Box) setelah substitusi S-Box
+# Permutation (P): Mengacak output 32-bit dari S-Box.
 P = [16, 7, 20, 21, 29, 12, 28, 17,
      1, 15, 23, 26, 5, 18, 31, 10,
      2, 8, 24, 14, 32, 27, 3, 9,
      19, 13, 30, 6, 22, 11, 4, 25]
 
+# --- KELAS UTAMA DES ---
+# Kelas ini membungkus semua logika DES.
 class DESFromScratch:
+    
+    # Konstruktor: Dipanggil saat 'DESFromScratch(kunci)' dibuat.
     def __init__(self, key):
+        # 1. Validasi Kunci: Kunci DES HARUS 8 byte (64 bit).
         if len(key) != 8:
             raise ValueError("Kunci harus tepat 8 byte (64 bit).")
         self.key = key
+        
+        # 2. Generate Subkeys: Langsung buat 16 subkey saat objek dibuat.
         self.subkeys = self._generate_subkeys()
 
+    # --- FUNGSI UTILITAS INTERNAL (HELPER) ---
+
     def _permute(self, block, table):
-        """Melakukan permutasi pada blok berdasarkan tabel."""
+        """Melakukan permutasi pada list 'block' berdasarkan 'table'."""
         return [block[p - 1] for p in table]
 
-    def _string_to_bits(self, text):
-        """Mengubah string menjadi list of bits."""
-        return [bit for char in text for bit in format(ord(char), '08b')]
-
     def _bytes_to_bits(self, data):
-        """Mengubah bytes menjadi list of bits."""
+        """Mengubah data bytes (misal: b'tes') menjadi list bit [0,1,1,0,...]."""
         return [int(bit) for byte in data for bit in format(byte, '08b')]
 
     def _bits_to_bytes(self, bits):
-        """Mengubah list of bits menjadi bytes."""
+        """Mengubah list bit [0,1,1,0,...] kembali menjadi data bytes."""
         byte_list = []
         for i in range(0, len(bits), 8):
             byte_val = int("".join(map(str, bits[i:i+8])), 2)
@@ -129,167 +141,144 @@ class DESFromScratch:
         return bytes(byte_list)
 
     def _xor(self, bits1, bits2):
-        """Melakukan operasi XOR pada dua list of bits."""
+        """Melakukan operasi XOR bit-per-bit pada dua list."""
         return [b1 ^ b2 for b1, b2 in zip(bits1, bits2)]
 
     def _left_shift(self, bits, n):
-        """Melakukan pergeseran kiri (circular) sebanyak n."""
+        """Melakukan pergeseran kiri sirkular (circular left shift) sebanyak n."""
         return bits[n:] + bits[:n]
 
+    # --- LOGIKA KEY SCHEDULE (PEMBUATAN SUBKEY) ---
+    
     def _generate_subkeys(self):
-        """Menghasilkan 16 subkunci 48-bit dari kunci utama."""
+        """Menghasilkan 16 subkey 48-bit dari kunci utama 64-bit."""
+        subkeys = []
         key_bits = self._bytes_to_bits(self.key)
         
-        # Langkah 1: PC-1
+        # Langkah 1: Terapkan PC-1 (64-bit -> 56-bit)
         permuted_key = self._permute(key_bits, PC1)
         
         # Langkah 2: Bagi menjadi C0 dan D0 (masing-masing 28 bit)
-        C = permuted_key[:28]
-        D = permuted_key[28:]
+        C, D = permuted_key[:28], permuted_key[28:]
         
-        subkeys = []
+        # Lakukan 16 ronde untuk membuat 16 subkey
         for i in range(16):
-            # Langkah 3: Lakukan pergeseran kiri
+            # Langkah 3: Geser C dan D ke kiri sesuai jadwal (SHIFT_SCHEDULE)
             C = self._left_shift(C, SHIFT_SCHEDULE[i])
             D = self._left_shift(D, SHIFT_SCHEDULE[i])
             
-            # Langkah 4: Gabungkan C dan D, lalu terapkan PC-2
+            # Langkah 4: Gabungkan C dan D, terapkan PC-2 (56-bit -> 48-bit)
             combined = C + D
             subkey = self._permute(combined, PC2)
             subkeys.append(subkey)
             
         return subkeys
 
+    # --- FUNGSI FEISTEL (F-function) ---
+    
     def _f_function(self, right_half, subkey):
-        """Fungsi Feistel (F-function)."""
-        # 1. Expansion
+        """Ini adalah jantung dari DES, fungsi Feistel (F)."""
+        
+        # Langkah 1: Expansion (E-Table) - (32-bit -> 48-bit)
         expanded = self._permute(right_half, E)
         
-        # 2. XOR dengan subkunci
+        # Langkah 2: Key Mixing - XOR hasil ekspansi dengan subkey ronde.
         xored = self._xor(expanded, subkey)
         
-        # 3. Substitusi S-Box
+        # Langkah 3: Substitution (S-Boxes) - (48-bit -> 32-bit)
+        # Ini adalah satu-satunya bagian non-linear dari DES.
         s_box_output = []
         for i in range(8):
-            chunk = xored[i*6 : (i+1)*6]
+            chunk = xored[i*6 : (i+1)*6] # Ambil 6 bit
+            # Bit pertama & terakhir (bit 1 & 6) -> nomor baris
             row = int(str(chunk[0]) + str(chunk[5]), 2)
+            # Bit tengah (bit 2-5) -> nomor kolom
             col = int("".join(map(str, chunk[1:5])), 2)
-            val = S_BOXES[i][row][col]
+            
+            # Ambil nilai 4-bit dari S-Box
+            val = S_BOXES[i][row][col] 
             s_box_output.extend(list(map(int, format(val, '04b'))))
             
-        # 4. Permutasi P-Box
-        permuted = self._permute(s_box_output, P)
-        
-        return permuted
+        # Langkah 4: Permutation (P-Box) - (32-bit -> 32-bit)
+        return self._permute(s_box_output, P)
+
+    # --- FUNGSI PEMROSESAN BLOK TUNGGAL (64-bit) ---
 
     def _process_block(self, block, subkeys):
-        """Memproses satu blok 64-bit untuk enkripsi/dekripsi."""
-        # 1. Initial Permutation
+        """Memproses satu blok 64-bit (enkripsi atau dekripsi)."""
+        
+        # Langkah 1: Initial Permutation (IP)
         block = self._permute(block, IP)
         
-        # 2. Bagi menjadi L0 dan R0
+        # Langkah 2: Bagi menjadi L dan R (masing-masing 32 bit)
         L, R = block[:32], block[32:]
         
-        # 3. 16 Ronde
+        # Langkah 3: Lakukan 16 Ronde Feistel
         for i in range(16):
-            L_prev, R_prev = L, R
-            L = R_prev
-            f_result = self._f_function(R_prev, subkeys[i])
-            R = self._xor(L_prev, f_result)
+            L_prev, R_prev = L, R  # Simpan nilai L dan R ronde sebelumnya
             
-        # 4. Swap terakhir
+            L = R_prev # L baru = R lama
+            f_result = self._f_function(R_prev, subkeys[i]) # Jalankan F-function
+            R = self._xor(L_prev, f_result) # R baru = L lama XOR F(R lama, subkey)
+            
+        # Langkah 4: Swap Terakhir (Final Swap)
+        # Setelah 16 ronde, gabungkan R dan L (bukan L dan R)
         block = R + L
         
-        # 5. Final Permutation
-        final_block = self._permute(block, FP)
-        return final_block
+        # Langkah 5: Final Permutation (FP)
+        return self._permute(block, FP)
+
+    # --- FUNGSI PADDING (PKCS#7) ---
+    # DES bekerja pada blok 8 byte. Padding memastikan data kita kelipatan 8.
 
     def _pad(self, data):
-        """Menambahkan padding PKCS#7."""
+        """Menambahkan byte padding agar panjang data pas kelipatan 8."""
+        # Misal: data 5 byte -> pad_len = 3. Tambahkan b'\x03\x03\x03'
         pad_len = 8 - (len(data) % 8)
         padding = bytes([pad_len] * pad_len)
         return data + padding
 
     def _unpad(self, data):
-        """Menghapus padding PKCS#7."""
+        """Membuang byte padding dari data."""
+        # Ambil byte terakhir untuk tahu berapa banyak padding
         pad_len = data[-1]
+        if pad_len > 8 or pad_len == 0:
+            raise ValueError("Padding tidak valid, kemungkinan kunci salah.")
+        # Cek apakah padding-nya konsisten
+        if any(b != pad_len for b in data[-pad_len:]):
+            raise ValueError("Byte padding tidak konsisten, kemungkinan kunci salah.")
         return data[:-pad_len]
 
-    def encrypt(self, plaintext):
-        """Mengenkripsi plaintext (string)."""
+    # --- FUNGSI PUBLIK (YANG DIPANGGIL SERVER/CLIENT) ---
+
+    def encrypt(self, plaintext: str) -> bytes:
+        """Mengenkripsi string plaintext menjadi bytes ciphertext (Mode ECB)."""
         plaintext_bytes = plaintext.encode('utf-8')
         padded_plaintext = self._pad(plaintext_bytes)
         
         ciphertext = b''
+        # Enkripsi per blok 8-byte (ini adalah mode ECB)
         for i in range(0, len(padded_plaintext), 8):
             block = padded_plaintext[i:i+8]
             block_bits = self._bytes_to_bits(block)
             encrypted_block_bits = self._process_block(block_bits, self.subkeys)
             ciphertext += self._bits_to_bytes(encrypted_block_bits)
-            
         return ciphertext
 
-    def decrypt(self, ciphertext):
-        """Mendekripsi ciphertext (bytes)."""
+    def decrypt(self, ciphertext: bytes) -> str:
+        """Mendekripsi bytes ciphertext menjadi string plaintext (Mode ECB)."""
         decrypted_padded_text = b''
-        reversed_subkeys = self.subkeys[::-1] # Kunci dibalik untuk dekripsi
         
+        # PENTING: Untuk dekripsi, subkey digunakan dalam urutan terbalik.
+        reversed_subkeys = self.subkeys[::-1] 
+        
+        # Dekripsi per blok 8-byte
         for i in range(0, len(ciphertext), 8):
             block = ciphertext[i:i+8]
             block_bits = self._bytes_to_bits(block)
             decrypted_block_bits = self._process_block(block_bits, reversed_subkeys)
             decrypted_padded_text += self._bits_to_bytes(decrypted_block_bits)
-            
-        original_text_bytes = self._unpad(decrypted_padded_text)
+        
+        # Buang padding dan ubah kembali ke string
+        original_text_bytes = self._unpad(decrypted_padded_text) 
         return original_text_bytes.decode('utf-8')
-
-
-# --- PROGRAM UTAMA ---
-if __name__ == "__main__":
-    while True:
-        print("\n=== IMPLEMENTASI DES DARI SCRATCH ===")
-        print("1. Enkripsi")
-        print("2. Dekripsi")
-        print("3. Keluar")
-        
-        pilihan = input("\nPilih operasi (1-3): ")
-        
-        if pilihan == "3":
-            print("Program selesai.")
-            break
-            
-        elif pilihan in ["1", "2"]:
-            # Input kunci (harus 8 karakter)
-            while True:
-                key_text = input("\nMasukkan kunci (8 karakter): ")
-                if len(key_text) == 8:
-                    break
-                print("Error: Kunci harus tepat 8 karakter!")
-            
-            key_bytes = key_text.encode('utf-8')
-            des_cipher = DESFromScratch(key_bytes)
-            
-            if pilihan == "1":
-                # Proses Enkripsi
-                plaintext = input("Masukkan teks yang akan dienkripsi: ")
-                print("\n--- HASIL ENKRIPSI ---")
-                print(f"Plaintext       : {plaintext}")
-                print(f"Kunci          : {key_text}")
-                ciphertext = des_cipher.encrypt(plaintext)
-                print(f"Ciphertext (Hex): {ciphertext.hex()}")
-                
-            else:
-                # Proses Dekripsi
-                hex_input = input("Masukkan ciphertext (dalam format hex): ")
-                try:
-                    ciphertext = bytes.fromhex(hex_input)
-                    decrypted_text = des_cipher.decrypt(ciphertext)
-                    print("\n--- HASIL DEKRIPSI ---")
-                    print(f"Ciphertext (Hex): {hex_input}")
-                    print(f"Kunci          : {key_text}")
-                    print(f"Hasil Dekripsi : {decrypted_text}")
-                except ValueError:
-                    print("Error: Format hex tidak valid!")
-                    
-        else:
-            print("Error: Pilihan tidak valid!")

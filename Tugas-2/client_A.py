@@ -1,19 +1,34 @@
-# client_A.py
-import socket, json, sys
-from des_scratch import DESFromScratch
+# Ini adalah file: client_A.py
+# (Device 2 - Bertindak sebagai Client "A" yang Menghubungi)
 
-# IP device B dan port harus benar
-SERVER_IP = "127.0.0.1"   # ganti ke IP device B di jaringanmu
+import socket, json, sys, time
+from des_scratch import DESFromScratch # Mengimpor modul DES yang kita buat
+
+# --- KONFIGURASI CLIENT ---
+# PENTING: Ganti ini ke IP LOKAL dari Device 1 (Server)
+SERVER_IP = "192.168.1.43" # CONTOH. Sesuaikan dengan IP server Anda.
 SERVER_PORT = 5000
 
-# 8-char key, harus sama definisinya dengan yang dipakai B
-KEY_A_TO_B = b"KEYAB__1"  # untuk enkripsi pesan dari A -> B
-KEY_B_TO_A = b"KEYBA__2"  # untuk dekripsi balasan dari B -> A
+# Kunci HARUS SAMA PERSIS dengan di server
+KEY_A_TO_B = b"TryThis1" # Kunci untuk MENGENKRIPSI pesan ke Server B
+KEY_B_TO_A = b"TryThis2" # Kunci untuk MENDEKRIPSI balasan dari Server B
 
-des_to_B   = DESFromScratch(KEY_A_TO_B)
-des_from_B = DESFromScratch(KEY_B_TO_A)
+# --- INISIALISASI OBJEK DES ---
+# Urutannya kebalikan dari server
+try:
+    # Objek ini disiapkan untuk enkripsi (menggunakan KEY_A_TO_B)
+    des_to_B   = DESFromScratch(KEY_A_TO_B)
+    # Objek ini disiapkan untuk dekripsi (menggunakan KEY_B_TO_A)
+    des_from_B = DESFromScratch(KEY_B_TO_A)
+except Exception as e:
+    print(f"[ERROR] Gagal menginisialisasi DES. Cek S_BOXES atau panjang kunci. Error: {e}")
+    sys.exit(1)
+    
+# --- FUNGSI UTILITAS JARINGAN (JSON) ---
+# (Fungsi ini identik dengan yang ada di server)
 
 def recv_json_line(sock):
+    """Menerima data socket hingga menemukan newline (\n) & parse sebagai JSON."""
     buf = b""
     while b"\n" not in buf:
         chunk = sock.recv(4096)
@@ -24,42 +39,91 @@ def recv_json_line(sock):
     return json.loads(line.decode("utf-8"))
 
 def send_json_line(sock, obj):
+    """Mengubah objek Python (dict) ke JSON, tambah newline (\n), & kirim."""
     data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
     sock.sendall(data)
 
+# --- FUNGSI UTAMA CLIENT ---
+
 def main():
-    print(f"[A] Connecting to {SERVER_IP}:{SERVER_PORT} ...")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    print(f"[A] Client (Device 2) siap.")
+    
+    # 1. SETUP & KONEKSI SOCKET
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        print(f"[A] Menghubungkan ke {SERVER_IP}:{SERVER_PORT} ...")
+        # .connect() mencoba menghubungi server
         sock.connect((SERVER_IP, SERVER_PORT))
-        print("[A] Connected.")
+        print("[A] Berhasil terhubung ke server!")
+    except Exception as e:
+        print(f"[A] GAGAL terhubung ke server. Pastikan IP benar & server berjalan. Error: {e}")
+        return
 
+    # 2. LOOP CHATTING UTAMA
+    with sock:
         while True:
-            msg = input("[A] Ketik pesan ke B (plain, kosong untuk keluar): ")
-            if msg == "":
-                break
-
-            ct = des_to_B.encrypt(msg)
-            send_json_line(sock, {
-                "type":"cipher_from_A",
-                "hex": ct.hex()
-            })
-
-            resp = recv_json_line(sock)
-            if resp is None:
-                print("[A] Server closed connection.")
-                break
-            if resp.get("type") != "cipher_from_B":
-                print("[A] Invalid response:", resp)
-                continue
-
             try:
-                pt_reply = des_from_B.decrypt(bytes.fromhex(resp["hex"]))
-                print(f"[A] Balasan dari B (dekrip): {pt_reply}")
+                # 3. MINTA INPUT & SIAPKAN PESAN
+                msg = input("\n[A] Ketik pesan (plain): ")
+                if msg == "": # Keluar jika input kosong
+                    break
+
+                # 4. BUAT PAKET PLAINTEXT (JSON)
+                # Bungkus pesan asli + timestamp ke dalam dict
+                current_time = int(time.time())
+                packet_to_encrypt = {
+                    "msg": msg,
+                    "ts": current_time # 'ts' untuk anti-replay attack
+                }
+                # Ubah dict ke string JSON (ini yg akan dienkripsi)
+                plaintext_json = json.dumps(packet_to_encrypt)
+
+                # 5. ENKRIPSI PESAN
+                ct = des_to_B.encrypt(plaintext_json)
+                
+                # Blok demo: Menampilkan plaintext & ciphertext sebelum dikirim
+                print(f"   [+] Plaintext (JSON): {plaintext_json}")
+                print(f"   [+] Ciphertext (Hex): {ct.hex().upper()}")
+
+                # 6. KIRIM PESAN TERENKRIPSI KE SERVER
+                send_json_line(sock, {
+                    "type": "cipher_from_A",
+                    "hex": ct.hex()
+                })
+                print("[A] Mengirim pesan terenkripsi...")
+
+                # 7. MENERIMA BALASAN
+                # .recv_json_line() adalah BLOKING -> program berhenti di sini menunggu balasan
+                print("[A] Menunggu balasan server...")
+                resp = recv_json_line(sock)
+                if resp is None:
+                    print("[A] Server menutup koneksi.")
+                    break
+                
+                # Cek protokol balasan
+                if resp.get("type") != "cipher_from_B":
+                    print("[A] Respon tidak valid:", resp)
+                    continue
+
+                # 8. DEKRIPSI BALASAN
+                decrypted_payload = des_from_B.decrypt(bytes.fromhex(resp["hex"]))
+                
+                # Parse JSON hasil dekripsi
+                reply_packet = json.loads(decrypted_payload)
+                
+                # 9. TAMPILKAN BALASAN (SUKSES)
+                print(f"[A] Balasan Server (dekrip): {reply_packet['msg']}")
+
+            # --- BLOK PENANGANAN ERROR ---
+            except (ConnectionResetError, BrokenPipeError):
+                print("[A] Koneksi terputus (server mungkin crash/berhenti).")
+                break
             except Exception as e:
-                print(f"[A] Gagal dekripsi balasan: {e}")
+                print(f"[A] Terjadi error: {e}")
+                break
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[A] Bye.")
+        print("\n[A] Keluar.")
