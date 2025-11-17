@@ -2,27 +2,19 @@
 import socket, json, sys, time
 from des_scratch import DESFromScratch # Impor DES Anda
 
-# --- TAMBAHKAN IMPOR UNTUK RSA ---
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
-from Crypto.Random import get_random_bytes # Untuk membuat session key
-# -----------------------------------
+# --- TAMBAHKAN IMPOR 'os' UNTUK RANDOM KEY ---
+import os 
+# ---------------------------------------------
 
 # --- KONFIGURASI CLIENT ---
-SERVER_IP = input("Masukkan IP Server (Device 1): ") # Minta IP saat runtime
+SERVER_IP = input("Masukkan IP Server (Device 1): ") 
 SERVER_PORT = 5000
 
-# --- HAPUS KUNCI HARDCODED DAN OBJEK DES LAMA ---
-# KEY_A_TO_B = b"TryThis1" # HAPUS
-# KEY_B_TO_A = b"TryThis2" # HAPUS
-# des_to_B = ... # HAPUS
-# des_from_B = ... # HAPUS
-# Kita akan membuat satu objek 'des_cipher' setelah key exchange
-
+# Objek 'des_cipher' akan dibuat SETELAH key exchange
+des_cipher = None
+    
 # --- FUNGSI UTILITAS JARINGAN (JSON) ---
-# (Salin fungsi recv_json_line dan send_json_line Anda ke sini...
-# ... tidak ada perubahan pada fungsi-fungsi ini)
-
+# (Fungsi recv_json_line dan send_json_line SAMA PERSIS, salin ke sini)
 def recv_json_line(sock):
     """Menerima data socket hingga menemukan newline (\n) & parse sebagai JSON."""
     buf = b""
@@ -38,9 +30,64 @@ def send_json_line(sock, obj):
     """Mengubah objek Python (dict) ke JSON, tambah newline (\n), & kirim."""
     data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
     sock.sendall(data)
-    
-# --- FUNGSI UTAMA CLIENT (DIMODIFIKASI) ---
 
+# --- FUNGSI KEY EXCHANGE (BARU) ---
+def perform_key_exchange(sock):
+    """Melakukan key exchange menggunakan RSA contoh dari kuliah."""
+    global des_cipher
+    try:
+        # Langkah 1: Terima Kunci Publik (PU_B) dari Server
+        incoming = recv_json_line(sock)
+        if not incoming or "n" not in incoming or "e" not in incoming:
+            raise ConnectionError("Gagal menerima public key dari server.")
+        
+        rsa_n = incoming["n"]
+        rsa_e = incoming["e"]
+        print(f"[A] Kunci publik server diterima: n={rsa_n}, e={rsa_e}")
+
+        # Langkah 2: Buat Session Key (8-byte acak untuk DES)
+        session_key = os.urandom(8) # 8 byte (64 bit) acak
+        print(f"[A] Session key DES di-generate (hex): {session_key.hex()}")
+
+        # Langkah 3: Enkripsi Session Key (M) dengan Public Key (e, n)
+        # Pisahkan 8 byte menjadi 16 nibble (4-bit)
+        key_parts_to_encrypt = []
+        for byte in session_key: # 'byte' akan menjadi integer (mis: 224)
+            high_nibble = byte >> 4    # misal: 224 >> 4  = 14 (0x0e)
+            low_nibble = byte & 0x0F # misal: 224 & 15 = 0  (0x00)
+            key_parts_to_encrypt.append(high_nibble)
+            key_parts_to_encrypt.append(low_nibble)
+            
+        print(f"[A] Kunci dipecah menjadi 16 nibble: {key_parts_to_encrypt}")
+
+        # Enkripsi 16 nibble satu per satu
+        # C = M^e mod n
+        encrypted_key_parts = []
+        for part in key_parts_to_encrypt: # 'part' dijamin 0-15
+            c = pow(part, rsa_e, rsa_n)
+            encrypted_key_parts.append(c)
+
+        print(f"[A] 16 bagian kunci terenkripsi: {encrypted_key_parts}")
+
+        # Langkah 4: Kirim 16 bagian kunci terenkripsi ke Server
+        send_json_line(sock, {"key_parts": encrypted_key_parts})
+        print("[A] Session key terenkripsi telah dikirim ke server.")
+
+        # Langkah 5: Tunggu ACK dari server
+        ack = recv_json_line(sock)
+        if not ack or ack.get("status") != "KEY_OK":
+            raise ConnectionError(f"Gagal menerima ACK kunci. Server: {ack.get('error', 'Unknown error')}")
+        
+        # Langkah 6: Inisialisasi DES Cipher dengan session key
+        des_cipher = DESFromScratch(session_key)
+        print("[A] Objek DES diinisialisasi. Komunikasi aman siap.")
+        return True
+
+    except Exception as e:
+        print(f"[A] ERROR saat Key Exchange: {e}")
+        return False
+        
+# --- FUNGSI UTAMA CLIENT ---
 def main():
     print(f"[A] Client (Device 2) siap.")
     
@@ -54,46 +101,14 @@ def main():
         return
 
     with sock:
-        # --- 2. PROSES KEY EXCHANGE (ALUR BARU) ---
-        try:
-            # Langkah 1: Terima Kunci Publik (PU_B) dari Server
-            # Ukuran 1024 cukup untuk menampung PEM key
-            public_key_pem = sock.recv(2048) 
-            if not public_key_pem:
-                raise ConnectionError("Server terputus sebelum mengirim public key.")
-            
-            # Import kunci PEM menjadi objek RSA
-            server_pub_key = RSA.import_key(public_key_pem)
-            print("[A] Kunci publik server diterima dan di-load.")
-
-            # Langkah 2: Buat Session Key (8-byte acak untuk DES)
-            session_key = get_random_bytes(8)
-            print(f"[A] Session key DES di-generate (hex): {session_key.hex()}")
-
-            # Langkah 3: Enkripsi Session Key (M) dengan Public Key (PU_B)
-            cipher_rsa = PKCS1_OAEP.new(server_pub_key)
-            encrypted_session_key = cipher_rsa.encrypt(session_key)
-
-            # Langkah 4: Kirim Session Key terenkripsi ke Server
-            sock.sendall(encrypted_session_key)
-            print("[A] Session key terenkripsi telah dikirim ke server.")
-
-            # Langkah 5: Tunggu ACK dari server
-            ack = sock.recv(1024)
-            if ack != b"KEY_OK":
-                raise ConnectionError("Gagal menerima ACK kunci dari server.")
-            
-            # Langkah 6: Inisialisasi DES Cipher dengan session key
-            des_cipher = DESFromScratch(session_key)
-            print("[A] Objek DES diinisialisasi. Komunikasi aman siap.")
-
-        except Exception as e:
-            print(f"[A] ERROR saat Key Exchange: {e}")
+        # --- 2. LAKUKAN KEY EXCHANGE ---
+        if not perform_key_exchange(sock):
+            print("[A] Key exchange gagal. Menutup koneksi.")
             return # Tutup koneksi jika key exchange gagal
 
-        # --- 3. LOOP CHATTING UTAMA (MODIFIKASI) ---
-        # Sekarang hanya menggunakan SATU 'des_cipher'
-
+        # --- 3. LOOP CHATTING UTAMA ---
+        # (Loop ini SAMA PERSIS seperti sebelumnya, tidak perlu diubah)
+        # Dia akan menggunakan variabel 'des_cipher' global
         while True:
             try:
                 # 3. MINTA INPUT & SIAPKAN PESAN
@@ -109,7 +124,7 @@ def main():
                 }
                 plaintext_json = json.dumps(packet_to_encrypt)
 
-                # 5. ENKRIPSI PESAN (menggunakan 'des_cipher')
+                # 5. ENKRIPSI PESAN
                 ct = des_cipher.encrypt(plaintext_json)
                 
                 print(f"    [+] Plaintext (JSON): {plaintext_json}")
@@ -133,16 +148,13 @@ def main():
                     print("[A] Respon tidak valid:", resp)
                     continue
 
-                # 8. DEKRIPSI BALASAN (menggunakan 'des_cipher')
+                # 8. DEKRIPSI BALASAN
                 decrypted_payload = des_cipher.decrypt(bytes.fromhex(resp["hex"]))
-                
-                # Parse JSON hasil dekripsi
                 reply_packet = json.loads(decrypted_payload)
                 
                 # 9. TAMPILKAN BALASAN (SUKSES)
                 print(f"[A] Balasan Server (dekrip): {reply_packet['msg']}")
 
-            # --- BLOK PENANGANAN ERROR ---
             except (ConnectionResetError, BrokenPipeError):
                 print("[A] Koneksi terputus (server mungkin crash/berhenti).")
                 break
