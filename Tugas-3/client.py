@@ -1,9 +1,10 @@
 # (Device 2 - Bertindak sebagai Client "A" yang Menghubungi)
 import socket, json, sys, time
-from des_scratch import DESFromScratch # Impor DES Anda
+from des_scratch import DESFromScratch # Mengimpor modul DES yang kita buat
 
-# --- TAMBAHKAN IMPOR 'os' UNTUK RANDOM KEY ---
+# --- TAMBAHKAN IMPOR 'os' DAN 'threading' ---
 import os 
+import threading
 # ---------------------------------------------
 
 # --- KONFIGURASI CLIENT ---
@@ -14,29 +15,31 @@ SERVER_PORT = 5000
 des_cipher = None
     
 # --- FUNGSI UTILITAS JARINGAN (JSON) ---
-# (Fungsi recv_json_line dan send_json_line SAMA PERSIS, salin ke sini)
+# (Fungsi recv_json_line dan send_json_line SAMA PERSIS)
 def recv_json_line(sock):
-    """Menerima data socket hingga menemukan newline (\n) & parse sebagai JSON."""
     buf = b""
     while b"\n" not in buf:
-        chunk = sock.recv(4096)
-        if not chunk:
+        try:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return None
+            buf += chunk
+        except ConnectionResetError:
             return None
-        buf += chunk
     line, rest = buf.split(b"\n", 1)
     return json.loads(line.decode("utf-8"))
 
 def send_json_line(sock, obj):
-    """Mengubah objek Python (dict) ke JSON, tambah newline (\n), & kirim."""
-    data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
-    sock.sendall(data)
+    try:
+        data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+        sock.sendall(data)
+    except (ConnectionResetError, BrokenPipeError):
+        pass # Koneksi sudah mati, tidak apa-apa
 
-# --- FUNGSI KEY EXCHANGE (BARU) ---
+# --- FUNGSI KEY EXCHANGE (SAMA PERSIS) ---
 def perform_key_exchange(sock):
-    """Melakukan key exchange menggunakan RSA contoh dari kuliah."""
     global des_cipher
     try:
-        # Langkah 1: Terima Kunci Publik (PU_B) dari Server
         incoming = recv_json_line(sock)
         if not incoming or "n" not in incoming or "e" not in incoming:
             raise ConnectionError("Gagal menerima public key dari server.")
@@ -45,40 +48,32 @@ def perform_key_exchange(sock):
         rsa_e = incoming["e"]
         print(f"[A] Kunci publik server diterima: n={rsa_n}, e={rsa_e}")
 
-        # Langkah 2: Buat Session Key (8-byte acak untuk DES)
-        session_key = os.urandom(8) # 8 byte (64 bit) acak
+        session_key = os.urandom(8) 
         print(f"[A] Session key DES di-generate (hex): {session_key.hex()}")
 
-        # Langkah 3: Enkripsi Session Key (M) dengan Public Key (e, n)
-        # Pisahkan 8 byte menjadi 16 nibble (4-bit)
         key_parts_to_encrypt = []
-        for byte in session_key: # 'byte' akan menjadi integer (mis: 224)
-            high_nibble = byte >> 4    # misal: 224 >> 4  = 14 (0x0e)
-            low_nibble = byte & 0x0F # misal: 224 & 15 = 0  (0x00)
+        for byte in session_key: 
+            high_nibble = byte >> 4    
+            low_nibble = byte & 0x0F 
             key_parts_to_encrypt.append(high_nibble)
             key_parts_to_encrypt.append(low_nibble)
             
         print(f"[A] Kunci dipecah menjadi 16 nibble: {key_parts_to_encrypt}")
 
-        # Enkripsi 16 nibble satu per satu
-        # C = M^e mod n
         encrypted_key_parts = []
-        for part in key_parts_to_encrypt: # 'part' dijamin 0-15
+        for part in key_parts_to_encrypt: 
             c = pow(part, rsa_e, rsa_n)
             encrypted_key_parts.append(c)
 
         print(f"[A] 16 bagian kunci terenkripsi: {encrypted_key_parts}")
 
-        # Langkah 4: Kirim 16 bagian kunci terenkripsi ke Server
         send_json_line(sock, {"key_parts": encrypted_key_parts})
         print("[A] Session key terenkripsi telah dikirim ke server.")
 
-        # Langkah 5: Tunggu ACK dari server
         ack = recv_json_line(sock)
         if not ack or ack.get("status") != "KEY_OK":
             raise ConnectionError(f"Gagal menerima ACK kunci. Server: {ack.get('error', 'Unknown error')}")
         
-        # Langkah 6: Inisialisasi DES Cipher dengan session key
         des_cipher = DESFromScratch(session_key)
         print("[A] Objek DES diinisialisasi. Komunikasi aman siap.")
         return True
@@ -86,9 +81,50 @@ def perform_key_exchange(sock):
     except Exception as e:
         print(f"[A] ERROR saat Key Exchange: {e}")
         return False
-        
-# --- FUNGSI UTAMA CLIENT ---
+
+# --- LOGIKA PENERIMA PESAN (BARU) ---
+def receive_messages(sock):
+    """Fungsi thread untuk Menerima & Mendekripsi pesan."""
+    global des_cipher
+    print("[A] Thread penerima pesan dimulai.")
+    try:
+        while True:
+            resp = recv_json_line(sock)
+            if resp is None:
+                print("\n[A] Server menutup koneksi. Tekan Enter untuk keluar.")
+                break # Keluar dari loop jika server disconnect
+            
+            msg_type = resp.get("type")
+            
+            if msg_type == "cipher_from_B":
+                # Ini adalah balasan chat dari partner
+                hex_ct = resp["hex"]
+                decrypted_payload = des_cipher.decrypt(bytes.fromhex(hex_ct))
+                reply_packet = json.loads(decrypted_payload)
+                print(f"\n[Pesan dari Partner]: {reply_packet['msg']}")
+                print("[A] Ketik pesan (plain): ", end="", flush=True) # Minta input lagi
+            
+            elif msg_type == "info":
+                # Ini pesan info dari server (seperti "CONNECTED" atau "disconnect")
+                print(f"\n[SERVER INFO]: {resp.get('msg')}")
+                print("[A] Ketik pesan (plain): ", end="", flush=True) # Minta input lagi
+            
+            else:
+                # Ini adalah pesan yang tidak kita duga
+                print(f"\n[A] Respon tidak dikenal: {resp}")
+                print("[A] Ketik pesan (plain): ", end="", flush=True)
+
+    except (ConnectionResetError, BrokenPipeError):
+        print("\n[A] Koneksi terputus (server mungkin crash/berhenti). Tekan Enter untuk keluar.")
+    except Exception as e:
+        # Menangani error jika kunci salah (padding/json)
+        print(f"\n[A] Error di thread penerima (mungkin data korup/kunci salah): {e}. Tekan Enter untuk keluar.")
+    finally:
+        sock.close() # Pastikan socket ditutup jika thread mati
+
+# --- FUNGSI UTAMA CLIENT (DIMODIFIKASI) ---
 def main():
+    global des_cipher
     print(f"[A] Client (Device 2) siap.")
     
     try:
@@ -101,22 +137,36 @@ def main():
         return
 
     with sock:
-        # --- 2. LAKUKAN KEY EXCHANGE ---
+        # 1. LAKUKAN KEY EXCHANGE
         if not perform_key_exchange(sock):
             print("[A] Key exchange gagal. Menutup koneksi.")
-            return # Tutup koneksi jika key exchange gagal
+            return
 
-        # --- 3. LOOP CHATTING UTAMA ---
-        # (Loop ini SAMA PERSIS seperti sebelumnya, tidak perlu diubah)
-        # Dia akan menggunakan variabel 'des_cipher' global
-        while True:
-            try:
-                # 3. MINTA INPUT & SIAPKAN PESAN
-                msg = input("\n[A] Ketik pesan (plain): ")
-                if msg == "": 
+        # 2. MULAI THREAD PENERIMA PESAN
+        # Thread ini akan berjalan di background, hanya untuk menerima
+        recv_thread = threading.Thread(target=receive_messages, args=(sock,))
+        recv_thread.daemon = True # Agar thread mati saat program utama ditutup
+        recv_thread.start()
+        
+        # 3. LOOP PENGIRIM PESAN (DI MAIN THREAD)
+        # Loop ini hanya untuk mengirim
+        try:
+            # Beri jeda 1 detik agar pesan "CONNECTED" dari server masuk lebih dulu
+            time.sleep(1) 
+            
+            while True:
+                msg = input("[A] Ketik pesan (plain): ")
+                
+                # Cek apakah thread penerima masih hidup. Jika tidak, hentikan input.
+                if not recv_thread.is_alive():
+                    print("[A] Koneksi penerima mati. Program akan berhenti.")
+                    break
+                
+                if msg == "": # Izinkan mengirim pesan kosong, tapi 'exit' untuk keluar
+                    continue
+                if msg.lower() == "exit":
                     break
 
-                # 4. BUAT PAKET PLAINTEXT (JSON)
                 current_time = int(time.time())
                 packet_to_encrypt = {
                     "msg": msg,
@@ -124,43 +174,21 @@ def main():
                 }
                 plaintext_json = json.dumps(packet_to_encrypt)
 
-                # 5. ENKRIPSI PESAN
                 ct = des_cipher.encrypt(plaintext_json)
                 
-                print(f"    [+] Plaintext (JSON): {plaintext_json}")
-                print(f"    [+] Ciphertext (Hex): {ct.hex().upper()}")
-
-                # 6. KIRIM PESAN TERENKRIPSI KE SERVER
+                # Kirim pesan (tanpa menunggu balasan di sini)
                 send_json_line(sock, {
                     "type": "cipher_from_A",
                     "hex": ct.hex()
                 })
-                print("[A] Mengirim pesan terenkripsi...")
 
-                # 7. MENERIMA BALASAN
-                print("[A] Menunggu balasan server...")
-                resp = recv_json_line(sock)
-                if resp is None:
-                    print("[A] Server menutup koneksi.")
-                    break
-                
-                if resp.get("type") != "cipher_from_B":
-                    print("[A] Respon tidak valid:", resp)
-                    continue
-
-                # 8. DEKRIPSI BALASAN
-                decrypted_payload = des_cipher.decrypt(bytes.fromhex(resp["hex"]))
-                reply_packet = json.loads(decrypted_payload)
-                
-                # 9. TAMPILKAN BALASAN (SUKSES)
-                print(f"[A] Balasan Server (dekrip): {reply_packet['msg']}")
-
-            except (ConnectionResetError, BrokenPipeError):
-                print("[A] Koneksi terputus (server mungkin crash/berhenti).")
-                break
-            except Exception as e:
-                print(f"[A] Terjadi error: {e}")
-                break
+        except (KeyboardInterrupt, EOFError):
+            print("\n[A] Keluar...")
+        except Exception as e:
+            print(f"\n[A] Error di thread pengirim: {e}")
+        finally:
+            sock.close()
+            print("[A] Koneksi ditutup.")
 
 if __name__ == "__main__":
     try:
