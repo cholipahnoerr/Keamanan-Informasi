@@ -1,28 +1,25 @@
 # (Device 1 - Bertindak sebagai Server "B" yang Mendengarkan)
 import socket, json, sys, time
 from des_scratch import DESFromScratch # Impor DES Anda
-
-# --- TAMBAHKAN IMPOR UNTUK RSA ---
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
-# -----------------------------------
+# TIDAK ADA impor 'Crypto' lagi
 
 # --- KONFIGURASI SERVER ---
 HOST = "0.0.0.0"
 PORT = 5000
 TIMESTAMP_WINDOW = 10 
 
-# --- HAPUS KUNCI HARDCODED DAN OBJEK DES LAMA ---
-# KEY_A_TO_B = b"TryThis1" # HAPUS
-# KEY_B_TO_A = b"TryThis2" # HAPUS
-# des_from_A = ... # HAPUS
-# des_to_A = ... # HAPUS
-# Kita akan membuat satu objek 'des_cipher' setelah key exchange
+# --- KUNCI RSA DARI CONTOH KULIAH (KI 12.pdf, hal 20) ---
+# p=17, q=11
+RSA_N = 187  # Modulus (n = p*q) [cite: 2155]
+RSA_E = 7    # Public Exponent (e) [cite: 2163]
+RSA_D = 23   # Private Exponent (d) [cite: 2164]
+# --------------------------------------------------------
+
+# Objek 'des_cipher' akan dibuat SETELAH key exchange
+des_cipher = None
 
 # --- FUNGSI UTILITAS JARINGAN (JSON) ---
-# (Salin fungsi recv_json_line dan send_json_line Anda ke sini...
-# ... tidak ada perubahan pada fungsi-fungsi ini)
-
+# (Fungsi recv_json_line dan send_json_line SAMA PERSIS, salin ke sini)
 def recv_json_line(conn):
     """Menerima data socket hingga menemukan newline (\n) & parse sebagai JSON."""
     buf = b""
@@ -42,22 +39,68 @@ def send_json_line(conn, obj):
     except Exception as e:
         print(f"[B] Gagal mengirim balasan: {e}")
 
-# --- FUNGSI UTAMA SERVER (DIMODIFIKASI) ---
+# --- FUNGSI KEY EXCHANGE (BARU) ---
+def perform_key_exchange(conn):
+    """Melakukan key exchange menggunakan RSA contoh dari kuliah."""
+    global des_cipher # Kita akan set variabel global
+    try:
+        # Langkah 1: Kirim Kunci Publik (PU={e,n}) ke Client
+        public_key_data = {"n": RSA_N, "e": RSA_E}
+        send_json_line(conn, public_key_data)
+        print(f"[B] Kunci publik RSA {public_key_data} telah dikirim.")
 
+        # Langkah 2: Terima Kunci DES yang dienkripsi (16 bagian)
+        incoming = recv_json_line(conn)
+        if not incoming or "key_parts" not in incoming:
+            raise ConnectionError("Client terputus/gagal mengirim session key.")
+
+        encrypted_key_parts = incoming["key_parts"]
+        if len(encrypted_key_parts) != 16: # HARUS TEPAT 16 BAGIAN
+            raise ValueError(f"Session key yang diterima bukan 16 bagian (menerima {len(encrypted_key_parts)}).")
+        
+        print(f"[B] Menerima 16 bagian kunci terenkripsi (nibbles)...")
+
+        # Langkah 3: Dekripsi 16 bagian kunci menggunakan Private Key (d, n)
+        # M = C^d mod n
+        decrypted_nibbles = []
+        for c in encrypted_key_parts:
+            # Gunakan pow(c, d, n) -> implementasi "Square & Multiply"
+            m = pow(c, RSA_D, RSA_N) 
+            decrypted_nibbles.append(m)
+        
+        # Langkah 4: Rekonstruksi 8 byte dari 16 nibble
+        session_key_bytes = []
+        for i in range(0, 16, 2): # Ambil 2 nibble sekaligus
+            high_nibble = decrypted_nibbles[i]
+            low_nibble = decrypted_nibbles[i+1]
+            
+            # Gabungkan 2 nibble (4-bit) menjadi 1 byte (8-bit)
+            byte_val = (high_nibble << 4) | low_nibble 
+            session_key_bytes.append(byte_val)
+            
+        session_key = bytes(session_key_bytes)
+        print(f"[B] Session key DES didekripsi (hex): {session_key.hex()}")
+
+        # Langkah 5: Inisialisasi DES Cipher dengan session key
+        des_cipher = DESFromScratch(session_key)
+        print("[B] Objek DES diinisialisasi. Komunikasi aman siap.")
+        
+        # Langkah 6: Kirim ACK ke client
+        send_json_line(conn, {"status": "KEY_OK"})
+        return True
+
+    except Exception as e:
+        print(f"[B] ERROR saat Key Exchange: {e}")
+        try:
+            send_json_line(conn, {"status": "KEY_FAIL", "error": str(e)})
+        except:
+            pass 
+        return False
+    
+# --- FUNGSI UTAMA SERVER ---
 def main():
     print(f"[B] Server (Device 1) siap.")
-    
-    # --- 1. GENERATE RSA KEY PAIR ---
-    # Sesuai teori KI 12.pdf, server membuat public/private key pair
-    try:
-        rsa_key = RSA.generate(2048) # 2048 bits
-        private_key = rsa_key
-        public_key_pem = rsa_key.publickey().export_key() # Format PEM untuk dikirim
-        print("[B] RSA key pair (2048-bit) telah di-generate.")
-    except Exception as e:
-        print(f"[B] ERROR: Gagal generate RSA key: {e}")
-        sys.exit(1)
-
+    print(f"[B] Kunci RSA di-load: n={RSA_N}, e={RSA_E}, d={RSA_D}")
     print(f"[B] Mendengarkan di {HOST}:{PORT}")
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -70,41 +113,14 @@ def main():
         with conn:
             print(f"[B] BERHASIL: Terhubung dengan client {addr}")
             
-            # --- 2. PROSES KEY EXCHANGE (ALUR BARU) ---
-            try:
-                # Langkah 1: Kirim Kunci Publik (PU_B) ke Client
-                conn.sendall(public_key_pem)
-                print(f"[B] Kunci publik RSA telah dikirim ke {addr}.")
-
-                # Langkah 2: Terima Kunci DES yang Dienkripsi
-                # Ukuran 256 byte karena RSA 2048-bit mengenkripsi ke 256 byte
-                encrypted_session_key = conn.recv(256) 
-                if not encrypted_session_key:
-                    raise ConnectionError("Client terputus sebelum mengirim session key.")
-                
-                # Langkah 3: Dekripsi Session Key menggunakan Private Key (PR_B)
-                cipher_rsa = PKCS1_OAEP.new(private_key)
-                session_key = cipher_rsa.decrypt(encrypted_session_key)
-
-                if len(session_key) != 8:
-                    raise ValueError("Session key yang diterima bukan 8 byte!")
-
-                print(f"[B] Session key DES diterima (hex): {session_key.hex()}")
-
-                # Langkah 4: Inisialisasi DES Cipher dengan session key
-                des_cipher = DESFromScratch(session_key)
-                print("[B] Objek DES diinisialisasi. Komunikasi aman siap.")
-                
-                # Langkah 5: Kirim ACK ke client
-                conn.sendall(b"KEY_OK")
-
-            except Exception as e:
-                print(f"[B] ERROR saat Key Exchange: {e}")
+            # --- 2. LAKUKAN KEY EXCHANGE ---
+            if not perform_key_exchange(conn):
+                print("[B] Key exchange gagal. Menutup koneksi.")
                 return # Tutup koneksi jika key exchange gagal
             
-            # --- 3. LOOP CHATTING UTAMA (MODIFIKASI) ---
-            # Sekarang hanya menggunakan SATU 'des_cipher'
-            
+            # --- 3. LOOP CHATTING UTAMA ---
+            # (Loop ini SAMA PERSIS seperti sebelumnya, tidak perlu diubah)
+            # Dia akan menggunakan variabel 'des_cipher' global
             while True:
                 try:
                     # 4. MENERIMA PESAN DARI CLIENT
@@ -152,8 +168,6 @@ def main():
                         "ts": current_time 
                     }
                     plaintext_json_reply = json.dumps(reply_packet_to_encrypt)
-
-                    # Enkripsi balasan menggunakan 'des_cipher' yang sama
                     ct_reply = des_cipher.encrypt(plaintext_json_reply)
 
                     print(f"    [+] Plaintext (JSON): {plaintext_json_reply}")
@@ -166,11 +180,10 @@ def main():
                     })
                     print("[B] Balasan terenkripsi terkirim.")
 
-                # --- BLOK PENANGANAN ERROR ---
                 except json.JSONDecodeError as e:
-                    print(f"[B] ERROR: Kunci salah. Gagal parse JSON hasil dekripsi. Error: {e}")
+                    print(f"[B] ERROR: Kunci salah/data korup. Gagal parse JSON hasil dekripsi. Error: {e}")
                 except (ValueError, TypeError) as e:
-                    print(f"[B] ERROR: Kunci salah. Gagal dekripsi/padding. Error: {e}")
+                    print(f"[B] ERROR: Kunci salah/data korup. Gagal dekripsi/padding. Error: {e}")
                 except Exception as e:
                     print(f"[B] ERROR: Terjadi error tak terduga: {e}")
                     continue 
@@ -180,5 +193,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n[B] Server dihentikan.")
-    except Exception as e:
-        print(f"[B] SERVER CRASHED (diluar loop): {e}")
