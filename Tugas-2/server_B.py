@@ -9,8 +9,8 @@ from des_scratch import DESFromScratch # Mengimpor modul DES yang kita buat
 # --- KONFIGURASI SERVER ---
 HOST = "0.0.0.0"       # Mendengarkan di semua interface (penting agar device lain bisa konek)
 PORT = 5000            # Port yang akan didengarkan
-KEY_A_TO_B = b"TryThis1" # Kunci untuk MENDEKRIPSI pesan dari Client A
-KEY_B_TO_A = b"TryThis2" # Kunci untuk MENGENKRIPSI balasan ke Client A
+KEY_A_TO_B = b"87654321" # Kunci untuk MENDEKRIPSI pesan dari Client A
+KEY_B_TO_A = b"87654321" # Kunci untuk MENGENKRIPSI balasan ke Client A
 TIMESTAMP_WINDOW = 10  # Jendela toleransi waktu (detik) untuk anti-replay attack
 
 # --- INISIALISASI OBJEK DES ---

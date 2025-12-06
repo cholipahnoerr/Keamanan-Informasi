@@ -6,12 +6,12 @@ from des_scratch import DESFromScratch # Mengimpor modul DES yang kita buat
 
 # --- KONFIGURASI CLIENT ---
 # PENTING: Ganti ini ke IP LOKAL dari Device 1 (Server)
-SERVER_IP = "192.168.1.43" # CONTOH. Sesuaikan dengan IP server Anda.
+SERVER_IP = "10.58.242.162" # Sesuaikan IP server.
 SERVER_PORT = 5000
 
 # Kunci HARUS SAMA PERSIS dengan di server
-KEY_A_TO_B = b"TryThis1" # Kunci untuk MENGENKRIPSI pesan ke Server B
-KEY_B_TO_A = b"TryThis2" # Kunci untuk MENDEKRIPSI balasan dari Server B
+KEY_A_TO_B = b"12345678" # Kunci untuk MENGENKRIPSI pesan ke Server B
+KEY_B_TO_A = b"87654321" # Kunci untuk MENDEKRIPSI balasan dari Server B
 
 # --- INISIALISASI OBJEK DES ---
 # Urutannya kebalikan dari server
